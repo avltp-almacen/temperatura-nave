@@ -53,6 +53,12 @@
     font-size: 13px;
     margin-bottom: 24px;
   }
+  .estado-row { margin-bottom: 24px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+  .estado-row #estado { margin-bottom: 0; }
+  .badge { font-size: 12px; font-weight: 600; }
+  .badge.ok { color: var(--safe); }
+  .badge.bad { color: var(--danger); }
+  .badge.neutral { color: var(--dim); }
 
   .panel-row {
     display: flex;
@@ -186,7 +192,10 @@
 <div class="wrap">
   <div class="eyebrow">Control térmico · AVLtp</div>
   <h1>Nave — Almacén</h1>
-  <div id="estado">Cargando datos…</div>
+  <div class="estado-row">
+    <span class="badge neutral" id="badge-conexion">● Cargando…</span>
+    <span id="estado">Cargando datos…</span>
+  </div>
 
   <div class="panel-row">
     <div class="gauge-block">
@@ -247,6 +256,7 @@ const FIREBASE_URL = "https://temperatura-nave-default-rtdb.europe-west1.firebas
 let allData = [];
 let threshold = 27;
 let chart = null;
+let ultimaLecturaGlobal = null;
 
 async function cargarDatos() {
   try {
@@ -317,12 +327,34 @@ function render() {
   document.getElementById('temp-max').textContent = resumenHoy.max.toFixed(1) + '°';
   document.getElementById('pct-sobre').textContent = resumenHoy.pctSobre.toFixed(0) + '%';
   document.getElementById('estado').textContent = 'Última lectura: ' + actual.fecha.toLocaleString('es-ES');
+  ultimaLecturaGlobal = actual.fecha;
+  actualizarEstadoConexion();
 
   actualizarGauge(actual.temp);
   actualizarSelectorDias(dias, ultimoDia);
   dibujarChart(lecturasHoy);
   dibujarTabla(grupos);
   dibujarTablaSemanal(agruparPorSemana(allData));
+}
+
+function actualizarEstadoConexion() {
+  if (!ultimaLecturaGlobal) return;
+  const badge = document.getElementById('badge-conexion');
+  const ahora = new Date();
+  const minutos = (ahora - ultimaLecturaGlobal) / 60000;
+  const hora = ahora.getHours();
+  const dentroHorario = hora >= 9 && hora < 18;
+
+  if (!dentroHorario) {
+    badge.textContent = '● Fuera de horario laboral';
+    badge.className = 'badge neutral';
+  } else if (minutos <= 45) {
+    badge.textContent = '● Conectado';
+    badge.className = 'badge ok';
+  } else {
+    badge.textContent = `● Sin conexión (hace ${Math.round(minutos)} min)`;
+    badge.className = 'badge bad';
+  }
 }
 
 function actualizarGauge(temp) {
@@ -503,6 +535,7 @@ document.getElementById('btn-pdf').addEventListener('click', () => {
 
 cargarDatos();
 setInterval(cargarDatos, 5 * 60 * 1000);
+setInterval(actualizarEstadoConexion, 30 * 1000);
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(console.error);
