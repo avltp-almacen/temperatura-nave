@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root {
     --bg: #14161a;
@@ -149,6 +150,13 @@
   }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .subtitulo {
+    font-family: var(--display);
+    font-size: 16px;
+    font-weight: 600;
+    margin: 28px 0 10px;
+    color: var(--text);
+  }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
   th { color: var(--dim); font-weight: 500; text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.06em; }
   .cell-danger { color: var(--danger); font-weight: 600; }
@@ -218,9 +226,18 @@
     <tbody id="tabla-body"></tbody>
   </table>
 
+  <h2 class="subtitulo">Resumen semanal</h2>
+  <table>
+    <thead>
+      <tr><th>Semana (lunes)</th><th>Mín</th><th>Máx</th><th>Media</th><th>% sobre umbral</th><th>Lecturas</th></tr>
+    </thead>
+    <tbody id="tabla-semanal-body"></tbody>
+  </table>
+
   <div class="acciones">
     <button id="btn-csv">Descargar CSV</button>
     <button id="btn-print">Imprimir informe</button>
+    <button id="btn-pdf">Descargar informe PDF</button>
   </div>
 </div>
 
@@ -249,10 +266,28 @@ async function cargarDatos() {
 
 function claveDia(fecha) { return fecha.toLocaleDateString('es-ES'); }
 
+function claveSemana(fecha) {
+  const d = new Date(fecha);
+  d.setHours(0, 0, 0, 0);
+  const diaSemana = (d.getDay() + 6) % 7; // 0 = lunes
+  d.setDate(d.getDate() - diaSemana);
+  return 'Semana del ' + d.toLocaleDateString('es-ES');
+}
+
 function agruparPorDia(data) {
   const grupos = {};
   data.forEach(d => {
     const k = claveDia(d.fecha);
+    if (!grupos[k]) grupos[k] = [];
+    grupos[k].push(d);
+  });
+  return grupos;
+}
+
+function agruparPorSemana(data) {
+  const grupos = {};
+  data.forEach(d => {
+    const k = claveSemana(d.fecha);
     if (!grupos[k]) grupos[k] = [];
     grupos[k].push(d);
   });
@@ -287,6 +322,7 @@ function render() {
   actualizarSelectorDias(dias, ultimoDia);
   dibujarChart(lecturasHoy);
   dibujarTabla(grupos);
+  dibujarTablaSemanal(agruparPorSemana(allData));
 }
 
 function actualizarGauge(temp) {
@@ -370,6 +406,24 @@ function dibujarTabla(grupos) {
   });
 }
 
+function dibujarTablaSemanal(grupos) {
+  const tbody = document.getElementById('tabla-semanal-body');
+  tbody.innerHTML = '';
+  Object.keys(grupos).reverse().forEach(semana => {
+    const r = resumenDia(grupos[semana]);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${semana}</td>
+      <td>${r.min.toFixed(1)}°</td>
+      <td>${r.max.toFixed(1)}°</td>
+      <td>${r.avg.toFixed(1)}°</td>
+      <td class="${r.pctSobre > 0 ? 'cell-danger' : ''}">${r.pctSobre.toFixed(0)}%</td>
+      <td>${r.n}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
 document.getElementById('selector-dia').addEventListener('change', (e) => {
   const grupos = agruparPorDia(allData);
   dibujarChart(grupos[e.target.value]);
@@ -392,6 +446,60 @@ document.getElementById('btn-csv').addEventListener('click', () => {
 });
 
 document.getElementById('btn-print').addEventListener('click', () => window.print());
+
+document.getElementById('btn-pdf').addEventListener('click', () => {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const grupos = agruparPorDia(allData);
+  const dias = Object.keys(grupos);
+  const fechaInicio = dias[0];
+  const fechaFin = dias[dias.length - 1];
+  const todasTemps = allData.map(d => d.temp);
+  const mediaGeneral = todasTemps.reduce((a, b) => a + b, 0) / todasTemps.length;
+  const sobreGeneral = (todasTemps.filter(t => t > threshold).length / todasTemps.length) * 100;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.text('AVLtp — Informe de Temperatura en Nave', 14, 18);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text(`Periodo: ${fechaInicio} — ${fechaFin}`, 14, 25);
+  doc.text(`Generado: ${new Date().toLocaleString('es-ES')}`, 14, 30);
+
+  doc.setFontSize(11);
+  doc.text(`Umbral de referencia: ${threshold}°C`, 14, 40);
+  doc.text(`Media general del periodo: ${mediaGeneral.toFixed(1)}°C`, 14, 46);
+  doc.text(`Lecturas por encima del umbral: ${sobreGeneral.toFixed(0)}%`, 14, 52);
+
+  doc.text('Evolución (día mostrado en el panel):', 14, 62);
+  const imgData = document.getElementById('grafica').toDataURL('image/png', 1.0);
+  doc.addImage(imgData, 'PNG', 14, 66, 180, 80);
+
+  let y = 158;
+  doc.setFont('helvetica', 'bold');
+  doc.text('Día', 14, y);
+  doc.text('Mín', 60, y);
+  doc.text('Máx', 80, y);
+  doc.text('Media', 100, y);
+  doc.text('% sobre umbral', 125, y);
+  doc.text('Lecturas', 168, y);
+  doc.setFont('helvetica', 'normal');
+  y += 6;
+
+  dias.forEach(dia => {
+    if (y > 280) { doc.addPage(); y = 20; }
+    const r = resumenDia(grupos[dia]);
+    doc.text(dia, 14, y);
+    doc.text(r.min.toFixed(1) + '°', 60, y);
+    doc.text(r.max.toFixed(1) + '°', 80, y);
+    doc.text(r.avg.toFixed(1) + '°', 100, y);
+    doc.text(r.pctSobre.toFixed(0) + '%', 132, y);
+    doc.text(String(r.n), 168, y);
+    y += 6;
+  });
+
+  doc.save('informe_temperatura_nave.pdf');
+});
 
 cargarDatos();
 setInterval(cargarDatos, 5 * 60 * 1000);
